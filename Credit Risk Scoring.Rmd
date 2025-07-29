@@ -1,0 +1,98 @@
+---
+title: "Credit Risk Scoring"
+author: "Amirzhan Yatayev"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r cars}
+
+
+
+library(caret)
+library(randomForest)
+library(xgboost)
+library(e1071)
+library(glmnet)
+library(pROC)
+library(ggplot2)
+library(dplyr)
+
+
+```
+
+```{r cars}
+
+url <- "https://archive.ics.uci.edu/ml/machine-learning-databases/statlog/german/german.data"
+df <- read.table(url, header = FALSE)
+
+
+colnames(df) <- c("Status", "Duration", "CreditHistory", "Purpose", "CreditAmount", 
+                  "Savings", "EmploymentDuration", "InstallmentRate", "PersonalStatusSex", 
+                  "OtherDebtors", "ResidenceDuration", "Property", "Age", 
+                  "OtherInstallmentPlans", "Housing", "ExistingCredits", "Job", 
+                  "NumberPeopleLiable", "Telephone", "ForeignWorker", "Class")
+
+df$Class <- factor(ifelse(df$Class == 1, "Good", "Bad"))
+
+
+
+set.seed(123)
+trainIndex <- createDataPartition(df$Class, p = 0.8, list = FALSE)
+train <- df[trainIndex, ]
+test <- df[-trainIndex, ]
+
+
+ 
+
+```
+
+```{r cars}
+
+
+# -------- Logistic Regression with shrinkage (Lasso/Ridge) --------
+# Convert categorical variables using one-hot encoding
+x_train <- model.matrix(Class ~ ., data = train)[,-1]
+x_test  <- model.matrix(Class ~ ., data = test)[,-1]
+y_train <- ifelse(train$Class == "Good", 1, 0)
+y_test  <- ifelse(test$Class == "Good", 1, 0)
+
+# Lasso regression (alpha = 1)
+
+ 
+
+```
+
+```{r cars}
+
+
+# -------- Random Forest --------
+rf_model <- randomForest(Class ~ ., data = train, ntree = 100)
+pred_rf <- predict(rf_model, newdata = test, type = "prob")[,2]
+roc_rf <- roc(test$Class, pred_rf, levels = c("Bad", "Good"))
+print(paste("Random Forest AUC:", round(auc(roc_rf), 3)))
+
+ 
+
+```
+
+```{r cars}
+
+
+# -------- XGBoost --------
+# Prepare data for xgboost
+dtrain <- xgb.DMatrix(data = x_train, label = y_train)
+dtest  <- xgb.DMatrix(data = x_test, label = y_test)
+
+xgb_model <- xgboost(data = dtrain, 
+                     objective = "binary:logistic",
+                     nrounds = 100, 
+                     verbose = 0)
+
+pred_xgb <- predict(xgb_model, newdata = dtest)
+roc_xgb <- roc(y_test, pred_xgb)
+print(paste("XGBoost AUC:", round(auc(roc_xgb), 3)))
+
+ 
+
+```
