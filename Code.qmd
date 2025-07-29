@@ -1,0 +1,238 @@
+---
+title: "Quantitative Bewertung des Marktrisikos"
+format: html
+editor: visual
+---
+
+## Quarto
+
+Quarto enables you to weave together content and executable code into a finished document. To learn more about Quarto see <https://quarto.org>.
+
+## Running Code
+
+```{r}
+library(quantmod)
+library(PerformanceAnalytics)
+library(ggplot2)
+library(coda)
+library(copula)
+library(rugarch)
+
+getSymbols(c("AAPL", "MSFT"), from = "2020-01-01", to = "2024-12-31")
+
+aapl_prices <- Cl(AAPL)
+msft_prices <- Cl(MSFT)
+
+aapl_returns <- na.omit(dailyReturn(aapl_prices, type = "log"))
+msft_returns <- na.omit(dailyReturn(msft_prices, type = "log"))
+
+returns <- na.omit(merge(aapl_returns, msft_returns))
+colnames(returns) <- c("AAPL", "MSFT")
+
+portfolio_returns <- rowMeans(returns)
+
+summary(returns)
+summary(portfolio_returns)
+
+set.seed(123)
+n_total <- length(portfolio_returns)
+n_train <- round(0.8 * n_total)
+train_returns <- portfolio_returns[1:n_train]
+test_returns <- portfolio_returns[(n_train + 1):n_total]
+
+
+```
+
+## GARCH-Modell
+
+```{r}
+library(rugarch)
+library(PerformanceAnalytics)
+
+chart.TimeSeries(returns, main = "Logarithmierte Tagesrenditen von AAPL und MSFT")
+spec <- ugarchspec(variance.model = list(model = "sGARCH", garchOrder = c(1, 1)),
+                   mean.model = list(armaOrder = c(0, 0), include.mean = TRUE),
+                   distribution.model = "norm")
+fit <- ugarchfit(spec, data = train_returns, out.sample = length(test_returns))
+
+n_test <- length(test_returns)
+forecast <- ugarchforecast(fit, n.ahead = 1, n.roll = n_test - 1)
+VaR_garch <- fitted(forecast) - 1.645 * sigma(forecast)
+
+
+actual <- as.numeric(test_returns)
+VaR <- as.numeric(VaR_garch)
+
+# Violation Rate
+violation_rate <- mean(actual < VaR)
+
+# Quantile Loss
+quantile_loss <- mean((actual[actual < VaR] - VaR[actual < VaR])^2)
+
+# Mean Absolute Error Upper
+mae_upper <- mean(pmax(actual - VaR, 0))
+
+# Ergebnis anzeigen
+data.frame(
+  Methode = "GARCH",
+  ViolationRate = round(violation_rate, 4),
+  QuantileLoss = round(quantile_loss, 6),
+  MAE_Upper = round(mae_upper, 6)
+)
+```
+
+## Historischer Value-at-Risk
+
+```{r}
+VaR_hist <- quantile(train_returns, probs = 0.05)
+
+VaR_vec_hist <- rep(VaR_hist, length(test_returns))
+
+
+actual <- as.numeric(test_returns)
+VaR <- VaR_vec_hist
+
+violation_rate <- mean(actual < VaR)
+quantile_loss <- mean((actual[actual < VaR] - VaR[actual < VaR])^2)
+mae_upper <- mean(pmax(actual - VaR, 0))
+
+data.frame(
+  Methode = "Historisch",
+  ViolationRate = round(violation_rate, 4),
+  QuantileLoss = round(quantile_loss, 6),
+  MAE_Upper = round(mae_upper, 6)
+)
+```
+
+## Parametrischer Value-at-Risk
+
+```{r}
+mu_param <- mean(train_returns)
+sigma_param <- sd(train_returns)
+VaR_param <- mu_param + sigma_param * qnorm(0.05)
+
+VaR_vec_param <- rep(VaR_param, length(test_returns))
+
+actual <- as.numeric(test_returns)
+VaR <- VaR_vec_param
+
+violation_rate <- mean(actual < VaR)
+quantile_loss <- mean((actual[actual < VaR] - VaR[actual < VaR])^2)
+mae_upper <- mean(pmax(actual - VaR, 0))
+
+data.frame(
+  Methode = "Parametrisch",
+  ViolationRate = round(violation_rate, 4),
+  QuantileLoss = round(quantile_loss, 6),
+  MAE_Upper = round(mae_upper, 6)
+)
+
+```
+
+## Bayesscher Value-at-Risk
+
+```{r}
+# A-priori-Parameter
+mu0 <- 0
+tau0 <- 0.001
+alpha0 <- 2
+beta0 <- 0.001
+
+
+n <- length(train_returns)
+y_bar <- mean(train_returns)
+s2 <- var(train_returns)
+
+tau_n <- tau0 + n
+mu_n <- (tau0 * mu0 + n * y_bar) / tau_n
+alpha_n <- alpha0 + n / 2
+beta_n <- beta0 + 0.5 * ((n - 1) * s2 + (tau0 * n * (y_bar - mu0)^2) / tau_n)
+
+
+set.seed(123)
+n_sim <- length(test_returns)
+sigma2_sim <- 1 / rgamma(n_sim, shape = alpha_n, rate = beta_n)
+mu_sim <- rnorm(n_sim, mean = mu_n, sd = sqrt(sigma2_sim / tau_n))
+returns_sim <- rnorm(n_sim, mean = mu_sim, sd = sqrt(sigma2_sim))
+
+VaR_bayes <- quantile(returns_sim, probs = 0.05)
+VaR_vec_bayes <- rep(VaR_bayes, length(test_returns))
+
+
+actual <- as.numeric(test_returns)
+VaR <- VaR_vec_bayes
+
+violation_rate <- mean(actual < VaR)
+quantile_loss <- mean((actual[actual < VaR] - VaR[actual < VaR])^2)
+mae_upper <- mean(pmax(actual - VaR, 0))
+
+data.frame(
+  Methode = "Bayessch",
+  ViolationRate = round(violation_rate, 4),
+  QuantileLoss = round(quantile_loss, 6),
+  MAE_Upper = round(mae_upper, 6)
+)
+
+```
+
+## Erweiterter Copula-Vergleich
+
+```{r}
+## Copula-Modelle mit Trainings- und Testdaten
+library(copula)
+library(PerformanceAnalytics)
+
+
+
+u_train <- as.matrix(pobs(train_data))
+
+
+copula_models <- list(
+  Gaussian = normalCopula(dim = 2),
+  t = tCopula(dim = 2, df.fixed = TRUE),
+  Clayton = claytonCopula(dim = 2),
+  Gumbel = gumbelCopula(dim = 2),
+  Frank = frankCopula(dim = 2)
+)
+
+results <- data.frame()
+
+
+for (name in names(copula_models)) {
+  cop_model <- copula_models[[name]]
+  
+  # Fitting der Copula auf Trainingsdaten
+  fit <- fitCopula(cop_model, u_train, method = "ml")
+  fitted_copula <- fit@copula
+
+  # Simulation von n_test Punkten aus Copula
+  sim_uv <- rCopula(nrow(test_data), fitted_copula)
+
+  # Rücktransformation via empirische Quantile
+  x_sim <- quantile(train_data[,1], probs = sim_uv[,1], type = 8)
+  y_sim <- quantile(train_data[,2], probs = sim_uv[,2], type = 8)
+
+  # Portfolioverluste (gleichgewichtet)
+  port_sim <- rowMeans(cbind(x_sim, y_sim))
+  VaR <- quantile(port_sim, probs = 0.05)
+
+  # Testdaten-Portfolio
+  test_returns <- rowMeans(test_data)
+
+  # Schritt 4: Metriken
+  violation_rate <- mean(test_returns < VaR)
+  quantile_loss <- mean((test_returns[test_returns < VaR] - VaR)^2)
+  mae_upper <- mean(pmax(test_returns - VaR, 0))
+
+
+  results <- rbind(results, data.frame(
+    Methode = paste(name, "Copula"),
+    ViolationRate = round(violation_rate, 4),
+    QuantileLoss = round(quantile_loss, 6),
+    MAE_Upper = round(mae_upper, 6)
+  ))
+}
+
+results
+
+```
